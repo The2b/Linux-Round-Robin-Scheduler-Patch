@@ -1,0 +1,181 @@
+diff --git a/include/linux/init_task.h b/include/linux/init_task.h
+index ee3ff961b84c..f4ecfe3e2d8c 100644
+--- a/include/linux/init_task.h
++++ b/include/linux/init_task.h
+@@ -229,6 +229,90 @@ extern struct cred init_cred;
+  *  INIT_TASK is used to set up the first task table, touch at
+  * your own risk!. Base=0, limit=0x1fffff (=2MB)
+  */
++#ifdef CONFIG_SCHED_RR
++#define INIT_TASK(tsk)	\
++{									\
++	INIT_TASK_TI(tsk)						\
++	.state		= 0,						\
++	.stack		= init_stack,					\
++	.usage		= ATOMIC_INIT(2),				\
++	.flags		= PF_KTHREAD,					\
++	.prio		= (MAX_RT_PRIO/2),				\
++	.static_prio	= NICE_TO_PRIO(0),	 			\
++	.normal_prio	= NICE_TO_PRIO(0),				\
++	.rt_priority	= (MAX_RT_PRIO/2),				\
++	.policy		= SCHED_RR,					\
++	.cpus_ptr	= &tsk.cpus_mask,				\
++	.cpus_mask	= CPU_MASK_ALL,					\
++	.nr_cpus_allowed= NR_CPUS,					\
++	.mm		= NULL,						\
++	.active_mm	= &init_mm,					\
++	.restart_block = {						\
++		.fn = do_no_restart_syscall,				\
++	},								\
++	.se		= {						\
++		.group_node 	= LIST_HEAD_INIT(tsk.se.group_node),	\
++	},								\
++	.rt		= {						\
++		.run_list	= LIST_HEAD_INIT(tsk.rt.run_list),	\
++		.time_slice	= RR_TIMESLICE,				\
++	},								\
++	.tasks		= LIST_HEAD_INIT(tsk.tasks),			\
++	INIT_PUSHABLE_TASKS(tsk)					\
++	INIT_CGROUP_SCHED(tsk)						\
++	.ptraced	= LIST_HEAD_INIT(tsk.ptraced),			\
++	.ptrace_entry	= LIST_HEAD_INIT(tsk.ptrace_entry),		\
++	.real_parent	= &tsk,						\
++	.parent		= &tsk,						\
++	.children	= LIST_HEAD_INIT(tsk.children),			\
++	.sibling	= LIST_HEAD_INIT(tsk.sibling),			\
++	.group_leader	= &tsk,						\
++	RCU_POINTER_INITIALIZER(real_cred, &init_cred),			\
++	RCU_POINTER_INITIALIZER(cred, &init_cred),			\
++	.comm		= INIT_TASK_COMM,				\
++	.thread		= INIT_THREAD,					\
++	.fs		= &init_fs,					\
++	.files		= &init_files,					\
++	.signal		= &init_signals,				\
++	.sighand	= &init_sighand,				\
++	.nsproxy	= &init_nsproxy,				\
++	.pending	= {						\
++		.list = LIST_HEAD_INIT(tsk.pending.list),		\
++		.signal = {{0}}},					\
++	.blocked	= {{0}},					\
++	.alloc_lock	= __SPIN_LOCK_UNLOCKED(tsk.alloc_lock),		\
++	.journal_info	= NULL,						\
++	INIT_CPU_TIMERS(tsk)						\
++	.pi_lock	= __RAW_SPIN_LOCK_UNLOCKED(tsk.pi_lock),	\
++	.timer_slack_ns = 50000, /* 50 usec default slack */		\
++	INIT_TIMER_LIST							\
++	.pids = {							\
++		[PIDTYPE_PID]  = INIT_PID_LINK(PIDTYPE_PID),		\
++		[PIDTYPE_PGID] = INIT_PID_LINK(PIDTYPE_PGID),		\
++		[PIDTYPE_SID]  = INIT_PID_LINK(PIDTYPE_SID),		\
++	},								\
++	.thread_group	= LIST_HEAD_INIT(tsk.thread_group),		\
++	.thread_node	= LIST_HEAD_INIT(init_signals.thread_head),	\
++	INIT_IDS							\
++	INIT_PERF_EVENTS(tsk)						\
++	INIT_TRACE_IRQFLAGS						\
++	INIT_LOCKDEP							\
++	INIT_FTRACE_GRAPH						\
++	INIT_TRACE_RECURSION						\
++	INIT_TASK_RCU_PREEMPT(tsk)					\
++	INIT_TASK_RCU_TASKS(tsk)					\
++	INIT_CPUSET_SEQ(tsk)						\
++	INIT_RT_MUTEXES(tsk)						\
++	INIT_PREV_CPUTIME(tsk)						\
++	INIT_VTIME(tsk)							\
++	INIT_NUMA_BALANCING(tsk)					\
++	INIT_KASAN(tsk)							\
++	INIT_LIVEPATCH(tsk)						\
++	INIT_TASK_SECURITY						\
++}
++#endif
++
++#ifdef CONFIG_SCHED_NORMAL
+ #define INIT_TASK(tsk)	\
+ {									\
+ 	INIT_TASK_TI(tsk)						\
+@@ -308,7 +392,7 @@ extern struct cred init_cred;
+ 	INIT_LIVEPATCH(tsk)						\
+ 	INIT_TASK_SECURITY						\
+ }
+-
++#endif
+ 
+ /* Attach to the init_task data structure for proper alignment */
+ #define __init_task_data __attribute__((__section__(".data..init_task")))
+diff --git a/kernel/Kconfig.preempt b/kernel/Kconfig.preempt
+index 11dbe26a8279..5f44bb785e48 100644
+--- a/kernel/Kconfig.preempt
++++ b/kernel/Kconfig.preempt
+@@ -83,5 +83,27 @@ config PREEMPT_RT_FULL
+ 
+ endchoice
+ 
++choice
++	prompt "Default Scheduler"
++	default SCHED_NORMAL
++	help
++	  The default scheduler to use. Currently only supports CFS and RR. If in doubt, select CFS.
++
++config SCHED_NORMAL
++	bool "Completely Fair Scheduler (CFS)"
++	help
++	  Linux's default scheduler; Select this if you are not using a real-time kernel
++
++config SCHED_RR
++	bool "Round Robin Scheduler (RR)"
++	depends on PREEMPT_RT_BASE || PREEMPT_RT_FULL
++	help
++	  Use the round robin scheduler, a real-time scheduler, in place of CFS. CFS will still be available
++	  for usage as normal, should you choose to change it on a process-by-process basis. Only use this if
++	  you are using a real-time kernel AND you notice issues due to CFS (usually missed dealines due to
++	  non-real-time processes having too much time saved up). If in doubt, use CFS.
++
++endchoice
++
+ config PREEMPT_COUNT
+-       bool
+\ No newline at end of file
++       bool
+diff --git a/kernel/sched/core.c b/kernel/sched/core.c
+index 1ab422da7706..9d1c30be212d 100644
+--- a/kernel/sched/core.c
++++ b/kernel/sched/core.c
+@@ -2424,11 +2424,30 @@ int sched_fork(unsigned long clone_flags, struct task_struct *p)
+ 	 */
+ 	p->state = TASK_NEW;
+ 
++#ifdef CONFIG_SCHED_NORMAL
+ 	/*
+ 	 * Make sure we do not leak PI boosting priority to the child.
+ 	 */
+ 	p->prio = current->normal_prio;
++#endif
++
++	/**
++	 * @author Thomas Lenz <thomas.lenz96@gmail.com> AS The2b
++	 * @purpose Change process to Round Robin and default priority when forking, if requested
++	 */
++#ifdef CONFIG_SCHED_RR
++	if(unlikely(p->sched_reset_on_fork)) {
++		p->prio = (MAX_RT_PRIO/2);
++		p->static_prio = NICE_TO_PRIO(0); // Since this is giving me issues, let's just set it to nice 0
++		p->rt_priority = (MAX_RT_PRIO/2);
++		p->normal_prio = NICE_TO_PRIO(0);
++		p->policy = SCHED_RR;
++	}
+ 
++	p->sched_reset_on_fork = 0;
++#endif
++
++#ifdef CONFIG_SCHED_NORMAL
+ 	/*
+ 	 * Revert to default priority/policy on fork if requested.
+ 	 */
+@@ -2449,6 +2468,7 @@ int sched_fork(unsigned long clone_flags, struct task_struct *p)
+ 		 */
+ 		p->sched_reset_on_fork = 0;
+ 	}
++#endif
+ 
+ 	if (dl_prio(p->prio)) {
+ 		put_cpu();
