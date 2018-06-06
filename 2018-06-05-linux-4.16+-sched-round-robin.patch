@@ -1,0 +1,101 @@
+diff --git a/init/init_task.c b/init/init_task.c
+index 3ac6e754cf64..69d2df9b8c7e 100644
+--- a/init/init_task.c
++++ b/init/init_task.c
+@@ -59,10 +59,19 @@ struct task_struct init_task
+ 	.stack		= init_stack,
+ 	.usage		= ATOMIC_INIT(2),
+ 	.flags		= PF_KTHREAD,
++#ifdef CONFIG_SCHED_NORMAL
+ 	.prio		= MAX_PRIO - 20,
+ 	.static_prio	= MAX_PRIO - 20,
+ 	.normal_prio	= MAX_PRIO - 20,
+ 	.policy		= SCHED_NORMAL,
++#endif
++#ifdef CONFIG_SCHED_RR
++	.prio		= (MAX_RT_PRIO/2),				
++	.static_prio	= NICE_TO_PRIO(0),	 			
++	.normal_prio	= NICE_TO_PRIO(0),				
++	.rt_priority	= (MAX_RT_PRIO/2),				
++	.policy		= SCHED_RR,					
++#endif
+ 	.cpus_allowed	= CPU_MASK_ALL,
+ 	.nr_cpus_allowed= NR_CPUS,
+ 	.mm		= NULL,
+diff --git a/kernel/Kconfig.preempt b/kernel/Kconfig.preempt
+index 3f9c97419f02..88789d8b06b1 100644
+--- a/kernel/Kconfig.preempt
++++ b/kernel/Kconfig.preempt
+@@ -54,5 +54,27 @@ config PREEMPT
+ 
+ endchoice
+ 
++choice
++	prompt "Default Scheduler"
++	default SCHED_NORMAL
++	help
++	  The default scheduler to use. Currently only supports CFS and RR. If in doubt, select CFS.
++
++config SCHED_NORMAL
++	bool "Completely Fair Scheduler (CFS)"
++	help
++	  Linux's default scheduler; Select this if you are not using a real-time kernel
++
++config SCHED_RR
++	bool "Round Robin Scheduler (RR)"
++	depends on PREEMPT_RT_BASE || PREEMPT_RT_FULL
++	help
++	  Use the round robin scheduler, a real-time scheduler, in place of CFS. CFS will still be available
++	  for usage as normal, should you choose to change it on a process-by-process basis. Only use this if
++	  you are using a real-time kernel AND you notice issues due to CFS (usually missed dealines due to
++	  non-real-time processes having too much time saved up). If in doubt, use CFS.
++
++endchoice
++
+ config PREEMPT_COUNT
+-       bool
+\ No newline at end of file
++       bool
+diff --git a/kernel/sched/core.c b/kernel/sched/core.c
+index 5f37ef9f6cd5..6204a90bcb70 100644
+--- a/kernel/sched/core.c
++++ b/kernel/sched/core.c
+@@ -2352,11 +2352,30 @@ int sched_fork(unsigned long clone_flags, struct task_struct *p)
+ 	 */
+ 	p->state = TASK_NEW;
+ 
++#ifdef CONFIG_SCHED_NORMAL
+ 	/*
+ 	 * Make sure we do not leak PI boosting priority to the child.
+ 	 */
+ 	p->prio = current->normal_prio;
++#endif
++
++	/**
++	 * @author Thomas Lenz <thomas.lenz96@gmail.com> AS The2b
++	 * @purpose Change process to Round Robin and default priority when forking, if requested
++	 */
++#ifdef CONFIG_SCHED_RR
++	if(unlikely(p->sched_reset_on_fork)) {
++		p->prio = (MAX_RT_PRIO/2);
++		p->static_prio = NICE_TO_PRIO(0); // Since this is giving me issues, let's just set it to nice 0
++		p->rt_priority = (MAX_RT_PRIO/2);
++		p->normal_prio = NICE_TO_PRIO(0);
++		p->policy = SCHED_RR;
++	}
+ 
++	p->sched_reset_on_fork = 0;
++#endif
++
++#ifdef CONFIG_SCHED_NORMAL
+ 	/*
+ 	 * Revert to default priority/policy on fork if requested.
+ 	 */
+@@ -2377,6 +2396,7 @@ int sched_fork(unsigned long clone_flags, struct task_struct *p)
+ 		 */
+ 		p->sched_reset_on_fork = 0;
+ 	}
++#endif
+ 
+ 	if (dl_prio(p->prio)) {
+ 		put_cpu();
